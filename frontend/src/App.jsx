@@ -1,15 +1,36 @@
 import { useRef, useState } from "react";
 import "./App.css";
 
+const API_BASE_URL = "http://127.0.0.1:8001";
+
 function App() {
+  // =========================================================
+  // NORMAL CODE REVIEW
+  // =========================================================
+
   const [code, setCode] = useState("");
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
 
+  // =========================================================
+  // GITHUB REPOSITORY REVIEW
+  // =========================================================
+
+  const [repoUrl, setRepoUrl] = useState("");
+  const [githubResult, setGithubResult] = useState(null);
+  const [githubLoading, setGithubLoading] = useState(false);
+
+  // =========================================================
+  // FILE INPUT
+  // =========================================================
+
   const fileInputRef = useRef(null);
 
-  // Analyze code
+  // =========================================================
+  // NORMAL CODE REVIEW
+  // =========================================================
+
   const reviewCode = async () => {
     if (!code.trim()) {
       alert("Please enter some code.");
@@ -20,40 +41,184 @@ function App() {
     setResult(null);
 
     try {
-      const response = await fetch("http://127.0.0.1:8000/review", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          code: code,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error("Backend request failed");
-      }
+      const response = await fetch(
+        `${API_BASE_URL}/review`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            code: code,
+          }),
+        }
+      );
 
       const data = await response.json();
+
+      if (!response.ok || data.error) {
+        throw new Error(
+          data.error || "Code review failed."
+        );
+      }
+
       setResult(data);
     } catch (error) {
-      console.error(error);
-      alert(
-        "Could not connect to backend. Make sure FastAPI is running on port 8000."
+      console.error("Code review error:", error);
+
+      setResult({
+        error:
+          error.message ||
+          "Could not connect to the backend. Make sure FastAPI is running on port 8001.",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // =========================================================
+  // NORMALIZE GITHUB REPOSITORY URL
+  // Accepts:
+  // https://github.com/owner/repo
+  // https://github.com/owner/repo.git
+  // https://github.com/owner/repo/tree/main
+  // https://github.com/owner/repo/pull/1
+  // etc.
+  // =========================================================
+
+  const normalizeGitHubUrl = (input) => {
+    let url = input.trim();
+
+    if (!url) {
+      throw new Error(
+        "Please enter a GitHub repository URL."
       );
     }
 
-    setLoading(false);
+    if (!/^https?:\/\//i.test(url)) {
+      url = `https://${url}`;
+    }
+
+    let parsedUrl;
+
+    try {
+      parsedUrl = new URL(url);
+    } catch {
+      throw new Error(
+        "Please enter a valid GitHub URL."
+      );
+    }
+
+    const hostname =
+      parsedUrl.hostname.toLowerCase();
+
+    if (
+      hostname !== "github.com" &&
+      hostname !== "www.github.com"
+    ) {
+      throw new Error(
+        "Please enter a github.com URL."
+      );
+    }
+
+    const parts = parsedUrl.pathname
+      .split("/")
+      .filter(Boolean);
+
+    if (parts.length < 2) {
+      throw new Error(
+        "The URL must contain a GitHub repository."
+      );
+    }
+
+    const owner = parts[0];
+
+    const repository = parts[1].replace(
+      /\.git$/i,
+      ""
+    );
+
+    if (!owner || !repository) {
+      throw new Error(
+        "Invalid GitHub repository URL."
+      );
+    }
+
+    return `https://github.com/${owner}/${repository}`;
   };
 
-  // Clear code and results
+  // =========================================================
+  // GITHUB REPOSITORY REVIEW
+  // =========================================================
+
+  const reviewRepository = async () => {
+    if (!repoUrl.trim()) {
+      alert(
+        "Please enter a GitHub repository URL."
+      );
+      return;
+    }
+
+    setGithubLoading(true);
+    setGithubResult(null);
+
+    try {
+      const normalizedUrl =
+        normalizeGitHubUrl(repoUrl);
+
+      const response = await fetch(
+        `${API_BASE_URL}/github-review`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            repo_url: normalizedUrl,
+          }),
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok || data.error) {
+        throw new Error(
+          data.error ||
+            "GitHub repository review failed."
+        );
+      }
+
+      setGithubResult(data);
+    } catch (error) {
+      console.error(
+        "GitHub repository review error:",
+        error
+      );
+
+      setGithubResult({
+        error:
+          error.message ||
+          "Could not connect to the backend.",
+      });
+    } finally {
+      setGithubLoading(false);
+    }
+  };
+
+  // =========================================================
+  // CLEAR CODE
+  // =========================================================
+
   const clearCode = () => {
     setCode("");
     setResult(null);
     setCopied(false);
   };
 
-  // Copy code
+  // =========================================================
+  // COPY CODE
+  // =========================================================
+
   const copyCode = async () => {
     if (!code.trim()) {
       alert("There is no code to copy.");
@@ -62,580 +227,1177 @@ function App() {
 
     try {
       await navigator.clipboard.writeText(code);
+
       setCopied(true);
 
       setTimeout(() => {
         setCopied(false);
       }, 2000);
     } catch (error) {
+      console.error(error);
       alert("Could not copy the code.");
     }
   };
 
-  // Download code as .py file
+  // =========================================================
+  // DOWNLOAD CODE
+  // =========================================================
+
   const downloadCode = () => {
     if (!code.trim()) {
       alert("There is no code to download.");
       return;
     }
 
-    const blob = new Blob([code], {
-      type: "text/plain",
-    });
+    const blob = new Blob(
+      [code],
+      {
+        type: "text/plain",
+      }
+    );
 
     const url = URL.createObjectURL(blob);
 
-    const link = document.createElement("a");
+    const link =
+      document.createElement("a");
+
     link.href = url;
-    link.download = "reviewed-code.py";
+    link.download =
+      "reviewed-code.py";
 
     document.body.appendChild(link);
+
     link.click();
 
     document.body.removeChild(link);
+
     URL.revokeObjectURL(url);
   };
 
-  // Open file selector
+  // =========================================================
+  // OPEN FILE SELECTOR
+  // =========================================================
+
   const uploadCode = () => {
-    fileInputRef.current.click();
+    fileInputRef.current?.click();
   };
 
-  // Read uploaded file
-  const handleFileUpload = (event) => {
-    const file = event.target.files[0];
+  // =========================================================
+  // HANDLE FILE UPLOAD
+  // =========================================================
+
+  const handleFileUpload = (
+    event
+  ) => {
+    const file =
+      event.target.files?.[0];
 
     if (!file) {
       return;
     }
 
-    const reader = new FileReader();
+    const reader =
+      new FileReader();
 
     reader.onload = (e) => {
-      setCode(e.target.result);
+      setCode(
+        String(
+          e.target?.result || ""
+        )
+      );
+
       setResult(null);
     };
 
     reader.onerror = () => {
-      alert("Could not read the selected file.");
+      alert(
+        "Could not read the selected file."
+      );
     };
 
     reader.readAsText(file);
 
-    // Allow selecting the same file again
     event.target.value = "";
   };
+
+  // =========================================================
+  // HELPERS
+  // =========================================================
+
+  const getSeverityClass = (
+    severity
+  ) => {
+    const value =
+      String(
+        severity || ""
+      ).toLowerCase();
+
+    if (
+      value === "critical" ||
+      value === "high"
+    ) {
+      return "high";
+    }
+
+    if (value === "medium") {
+      return "medium";
+    }
+
+    return "low";
+  };
+
+  const getRiskClass = (
+    level
+  ) => {
+    const value =
+      String(
+        level || ""
+      ).toLowerCase();
+
+    if (value === "high") {
+      return "high";
+    }
+
+    if (value === "medium") {
+      return "medium";
+    }
+
+    return "low";
+  };
+
+  const countFindings = (
+    findings = [],
+    type
+  ) => {
+    return findings.filter(
+      (finding) =>
+        String(
+          finding?.type || ""
+        ).toLowerCase() ===
+        String(type).toLowerCase()
+    ).length;
+  };
+
+  const getRiskAngle = (
+    score
+  ) => {
+    const safeScore =
+      Math.min(
+        Math.max(
+          Number(score) || 0,
+          0
+        ),
+        100
+      );
+
+    return (
+      safeScore * 3.6
+    );
+  };
+
+  // =========================================================
+  // UI
+  // =========================================================
 
   return (
     <div className="app">
 
-      {/* SIDEBAR */}
+      {/* =====================================================
+          SIDEBAR
+          ===================================================== */}
+
       <aside className="sidebar">
 
         <div className="brand">
-          <div className="brand-icon">C</div>
+
+          <div className="brand-icon">
+            C
+          </div>
 
           <div>
-            <h2>CodeGuard</h2>
-            <span>AI Developer Tools</span>
+            <h2>
+              CodeGuard
+            </h2>
+
+            <span>
+              AI Developer Tools
+            </span>
           </div>
+
         </div>
 
         <nav className="nav">
 
           <div className="nav-section">
-            <span className="nav-title">WORKSPACE</span>
 
-            <a className="nav-item active">
+            <span className="nav-title">
+              WORKSPACE
+            </span>
+
+            <a
+              className="nav-item active"
+              href="#code-review"
+            >
               <span>⌘</span>
               Code Review
             </a>
 
-            <a className="nav-item">
+            <a
+              className="nav-item"
+              href="#repository-review"
+            >
               <span>⑂</span>
-              Pull Requests
+              Repository Review
             </a>
 
-            <a className="nav-item">
+            <a
+              className="nav-item"
+              href="#security"
+            >
               <span>🛡</span>
               Security
             </a>
+
           </div>
 
           <div className="nav-section">
-            <span className="nav-title">PROJECT</span>
 
-            <a className="nav-item">
-              <span>◷</span>
-              Review History
-            </a>
+            <span className="nav-title">
+              PROJECT
+            </span>
 
-            <a className="nav-item">
+            <a
+              className="nav-item"
+              href="#repository"
+            >
               <span>▣</span>
               Repository
             </a>
-          </div>
 
-          <div className="nav-section">
-            <span className="nav-title">SYSTEM</span>
-
-            <a className="nav-item">
-              <span>⚙</span>
-              Settings
-            </a>
           </div>
 
         </nav>
 
-        <div className="sidebar-bottom">
-
-          <div className="status-dot"></div>
-
-          <div>
-            <strong>System Online</strong>
-            <span>All services operational</span>
-          </div>
-
-        </div>
-
       </aside>
 
+      {/* =====================================================
+          MAIN CONTENT
+          ===================================================== */}
 
-      {/* MAIN AREA */}
-      <div className="main-area">
+      <main className="main-content">
 
-        {/* TOP BAR */}
+        {/* ===================================================
+            HEADER
+            =================================================== */}
+
         <header className="topbar">
 
           <div>
-            <span className="breadcrumb">Workspace</span>
-            <span className="separator">/</span>
-            <strong>Code Review</strong>
+
+            <h1>
+              AI Code Review &
+              Release-Risk Assistant
+            </h1>
+
+            <p>
+              Detect bugs, security
+              vulnerabilities and release
+              risks using rules + Gemini AI.
+            </p>
+
           </div>
 
-          <div className="topbar-right">
-
-            <div className="github-status">
-              <span className="github-dot"></span>
-              GitHub Connected
-            </div>
-
-            <div className="avatar">
-              N
-            </div>
-
+          <div className="status-badge">
+            ● AI Connected
           </div>
 
         </header>
 
+        {/* ===================================================
+            CODE REVIEW EDITOR
+            =================================================== */}
 
-        {/* CONTENT */}
-        <main className="content">
+        <section
+          id="code-review"
+          className="workspace-card"
+        >
 
-          {/* HERO */}
-          <section className="hero">
+          <div className="card-header">
 
             <div>
 
-              <span className="eyebrow">
-                INTELLIGENT CODE ANALYSIS
+              <span className="card-title">
+                Code Review
               </span>
 
-              <h1>
-                Review code before it
-                <br />
-                reaches production.
-              </h1>
-
-              <p>
-                Detect security vulnerabilities, code quality issues,
-                and release risks with AI-powered analysis.
-              </p>
+              <span className="card-subtitle">
+                Paste code or upload a
+                source file
+              </span>
 
             </div>
 
-            <div className="hero-badge">
-              <span>✦</span>
-              AI ENGINE ACTIVE
-            </div>
+          </div>
 
-          </section>
+          <div className="code-editor-wrapper">
 
+            <textarea
+              className="code-editor"
+              value={code}
+              onChange={(e) => {
+                setCode(
+                  e.target.value
+                );
 
-          {/* STATS */}
-          <section className="stats-grid">
-
-            <div className="stat-card">
-              <span className="stat-label">
-                TOTAL REVIEWS
-              </span>
-
-              <strong>24</strong>
-
-              <span className="stat-change">
-                ↑ 12% this month
-              </span>
-            </div>
-
-
-            <div className="stat-card">
-              <span className="stat-label">
-                ISSUES FOUND
-              </span>
-
-              <strong>18</strong>
-
-              <span className="stat-change">
-                6 critical
-              </span>
-            </div>
-
-
-            <div className="stat-card">
-              <span className="stat-label">
-                AVG. RISK SCORE
-              </span>
-
-              <strong>32<span>/100</span></strong>
-
-              <span className="stat-change">
-                ↓ 8% improvement
-              </span>
-            </div>
-
-
-            <div className="stat-card">
-              <span className="stat-label">
-                DEPLOYMENTS
-              </span>
-
-              <strong>21</strong>
-
-              <span className="stat-change">
-                3 blocked
-              </span>
-            </div>
-
-          </section>
-
-
-          {/* CODE REVIEW AREA */}
-          <section className="review-layout">
-
-            {/* CODE EDITOR */}
-            <div className="editor-card">
-
-              <div className="card-header">
-
-                <div>
-                  <span className="card-title">
-                    Code Analysis
-                  </span>
-
-                  <span className="card-subtitle">
-                    Paste or upload your source code
-                  </span>
-                </div>
-
-                <div className="file-badge">
-                  PYTHON
-                </div>
-
-              </div>
-
-
-              <div className="file-bar">
-
-                <span>main.py</span>
-
-                <span className="file-status">
-                  ● Ready
-                </span>
-
-              </div>
-
-
-              <div className="editor">
-
-                <div className="line-numbers">
-
-                  {Array.from(
-                    {
-                      length: Math.max(
-                        code.split("\n").length,
-                        10
-                      ),
-                    },
-                    (_, index) => (
-                      <span key={index}>
-                        {index + 1}
-                      </span>
-                    )
-                  )}
-
-                </div>
-
-
-                <textarea
-                  value={code}
-                  onChange={(e) => {
-                    setCode(e.target.value);
-                    setResult(null);
-                  }}
-                  placeholder={`# Paste your Python code here
+                setResult(null);
+              }}
+              placeholder={`# Paste your Python code here
 
 def hello_world():
     print("Hello World")
 
 hello_world()`}
-                  spellCheck="false"
-                />
+              spellCheck="false"
+            />
 
+          </div>
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".py,.js,.jsx,.ts,.tsx,.java,.cpp,.c,.html,.css,.txt"
+            onChange={
+              handleFileUpload
+            }
+            style={{
+              display: "none",
+            }}
+          />
+
+          <div className="editor-actions">
+
+            <div className="left-actions">
+
+              <button
+                className="tool-btn"
+                onClick={
+                  clearCode
+                }
+              >
+                🗑 Clear
+              </button>
+
+              <button
+                className="tool-btn"
+                onClick={
+                  copyCode
+                }
+              >
+                📋{" "}
+                {
+                  copied
+                    ? "Copied!"
+                    : "Copy"
+                }
+              </button>
+
+              <button
+                className="tool-btn"
+                onClick={
+                  downloadCode
+                }
+              >
+                ↓ Download
+              </button>
+
+              <button
+                className="tool-btn"
+                onClick={
+                  uploadCode
+                }
+              >
+                ↑ Upload
+              </button>
+
+            </div>
+
+            <button
+              className="analyze-btn"
+              onClick={
+                reviewCode
+              }
+              disabled={
+                loading
+              }
+            >
+
+              {loading ? (
+
+                <>
+                  <span className="spinner"></span>
+                  Analyzing...
+                </>
+
+              ) : (
+
+                <>
+                  ✦ Analyze with AI
+                </>
+
+              )}
+
+            </button>
+
+          </div>
+
+        </section>
+
+        {/* ===================================================
+            NORMAL CODE REVIEW RESULT
+            =================================================== */}
+
+        <section className="results-card">
+
+          <div className="card-header">
+
+            <div>
+
+              <span className="card-title">
+                Release Risk
+              </span>
+
+              <span className="card-subtitle">
+                AI-powered security
+                assessment
+              </span>
+
+            </div>
+
+          </div>
+
+          {!result ? (
+
+            <div className="empty-state">
+
+              <div className="empty-icon">
+                ✦
               </div>
 
+              <h3>
+                Ready to analyze
+              </h3>
 
-              {/* HIDDEN FILE INPUT */}
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".py,.js,.jsx,.ts,.tsx,.java,.cpp,.c,.html,.css,.txt"
-                onChange={handleFileUpload}
-                style={{ display: "none" }}
-              />
+              <p>
+                Submit your code to
+                receive a detailed
+                release-risk assessment.
+              </p>
 
+            </div>
 
-              {/* BUTTONS */}
-              <div className="editor-actions">
+          ) : result.error ? (
 
-                <div className="left-actions">
+            <div className="empty-state">
 
-                  <button
-                    className="tool-btn"
-                    onClick={clearCode}
-                    title="Clear all code"
-                  >
-                    🗑 Clear
-                  </button>
+              <div className="empty-icon">
+                ⚠
+              </div>
 
-                  <button
-                    className="tool-btn"
-                    onClick={copyCode}
-                    title="Copy code"
-                  >
-                    📋 {copied ? "Copied!" : "Copy"}
-                  </button>
+              <h3>
+                Analysis Error
+              </h3>
 
-                  <button
-                    className="tool-btn"
-                    onClick={downloadCode}
-                    title="Download code"
-                  >
-                    ↓ Download
-                  </button>
+              <p>
+                {
+                  result.error
+                }
+              </p>
 
-                  <button
-                    className="tool-btn"
-                    onClick={uploadCode}
-                    title="Upload code file"
-                  >
-                    ↑ Upload
-                  </button>
+            </div>
+
+          ) : (
+
+            <div className="analysis-result">
+
+              <div className="stats-grid">
+
+                <div className="stat-card">
+
+                  <span>
+                    Security
+                  </span>
+
+                  <strong>
+                    {
+                      countFindings(
+                        result.findings,
+                        "Security"
+                      )
+                    }
+                  </strong>
 
                 </div>
 
+                <div className="stat-card">
 
-                <button
-                  className="analyze-btn"
-                  onClick={reviewCode}
-                  disabled={loading}
+                  <span>
+                    Bugs
+                  </span>
+
+                  <strong>
+                    {
+                      countFindings(
+                        result.findings,
+                        "Bugs"
+                      ) +
+                      countFindings(
+                        result.findings,
+                        "Bug"
+                      )
+                    }
+                  </strong>
+
+                </div>
+
+                <div className="stat-card">
+
+                  <span>
+                    Total Findings
+                  </span>
+
+                  <strong>
+                    {
+                      result.findings
+                        ?.length || 0
+                    }
+                  </strong>
+
+                </div>
+
+                <div className="stat-card">
+
+                  <span>
+                    Risk Score
+                  </span>
+
+                  <strong>
+                    {
+                      result.risk_score
+                    }
+                    /100
+                  </strong>
+
+                </div>
+
+              </div>
+
+              <div className="risk-visual">
+
+                <div
+                  className="risk-circle"
+                  style={{
+                    "--risk": `${getRiskAngle(
+                      result.risk_score
+                    )}deg`,
+                  }}
                 >
-                  {loading ? (
-                    <>
-                      <span className="spinner"></span>
-                      Analyzing...
-                    </>
-                  ) : (
-                    <>
-                      ✦ Analyze with AI
-                    </>
-                  )}
-                </button>
+
+                  <div className="risk-circle-inner">
+
+                    <strong>
+                      {
+                        result.risk_score
+                      }
+                    </strong>
+
+                    <span>
+                      /100
+                    </span>
+
+                  </div>
+
+                </div>
+
+                <div className="risk-details">
+
+                  <span className="risk-label">
+                    RELEASE RISK
+                  </span>
+
+                  <h2>
+                    {
+                      result.risk_level
+                    }
+                  </h2>
+
+                  <p>
+                    CodeGuard recommends:
+                    <strong>
+                      {" "}
+                      {
+                        result.decision
+                      }
+                    </strong>
+                  </p>
+
+                  <div className="risk-bar">
+
+                    <div
+                      className="risk-bar-fill"
+                      style={{
+                        width: `${Math.min(
+                          Math.max(
+                            Number(
+                              result.risk_score
+                            ) || 0,
+                            0
+                          ),
+                          100
+                        )}%`,
+                      }}
+                    />
+
+                  </div>
+
+                </div>
+
+              </div>
+
+              {result.ai_summary && (
+
+                <div className="summary-box">
+
+                  <h3>
+                    Gemini AI Summary
+                  </h3>
+
+                  <p>
+                    {
+                      result.ai_summary
+                    }
+                  </p>
+
+                </div>
+
+              )}
+
+              <div className="findings-section">
+
+                <h3>
+                  Issues Found
+                </h3>
+
+                {result.findings?.length > 0 ? (
+
+                  result.findings.map(
+                    (
+                      finding,
+                      index
+                    ) => (
+
+                      <div
+                        key={index}
+                        className={`issue ${getSeverityClass(
+                          finding?.severity
+                        )}`}
+                      >
+
+                        <div className="issue-header">
+
+                          <strong>
+                            {
+                              finding?.severity ||
+                              "Info"
+                            }
+                            {" — "}
+                            {
+                              finding?.type ||
+                              "Finding"
+                            }
+                          </strong>
+
+                        </div>
+
+                        <p>
+                          {
+                            finding?.message ||
+                            "No description provided."
+                          }
+                        </p>
+
+                        {finding?.recommendation && (
+
+                          <p>
+
+                            <strong>
+                              Recommendation:
+                            </strong>
+
+                            {" "}
+
+                            {
+                              finding.recommendation
+                            }
+
+                          </p>
+
+                        )}
+
+                      </div>
+
+                    )
+                  )
+
+                ) : (
+
+                  <div className="empty-state">
+
+                    <h3>
+                      No issues found
+                    </h3>
+
+                    <p>
+                      The submitted code
+                      passed the current
+                      review checks.
+                    </p>
+
+                  </div>
+
+                )}
 
               </div>
 
             </div>
 
+          )}
 
-            {/* RESULTS */}
-            <div className="results-card">
+        </section>
 
-              <div className="card-header">
+        {/* ===================================================
+            GITHUB REPOSITORY REVIEW
+            =================================================== */}
 
-                <div>
-                  <span className="card-title">
-                    Release Risk
+        <section
+          id="repository-review"
+          className="results-card github-card"
+        >
+
+          <div className="card-header">
+
+            <div>
+
+              <span className="card-title">
+                GitHub Repository Review
+              </span>
+
+              <span className="card-subtitle">
+                Analyze any accessible GitHub
+                repository — no Pull Request
+                required
+              </span>
+
+            </div>
+
+          </div>
+
+          <div className="github-form">
+
+            <div className="form-group">
+
+              <label>
+                GitHub Repository URL
+              </label>
+
+              <input
+                type="text"
+                value={repoUrl}
+                onChange={(e) =>
+                  setRepoUrl(
+                    e.target.value
+                  )
+                }
+                placeholder="https://github.com/owner/repository"
+              />
+
+              <small
+                style={{
+                  display: "block",
+                  marginTop: "7px",
+                  color: "#64748b",
+                  fontSize: "11px",
+                }}
+              >
+                Example:
+             https://github.com/yourusername/your-repository.git
+
+              </small>
+
+            </div>
+
+            <button
+              className="analyze-btn"
+              onClick={
+                reviewRepository
+              }
+              disabled={
+                githubLoading
+              }
+            >
+
+              {githubLoading ? (
+
+                <>
+                  <span className="spinner"></span>
+                  Reviewing Repository...
+                </>
+
+              ) : (
+
+                <>
+                  🔍 Review Repository
+                </>
+
+              )}
+
+            </button>
+
+          </div>
+
+          {/* =================================================
+              GITHUB RESULT
+              ================================================= */}
+
+          {githubResult?.error ? (
+
+            <div className="empty-state github-error">
+
+              <div className="empty-icon">
+                ⚠
+              </div>
+
+              <h3>
+                Repository Review Error
+              </h3>
+
+              <p>
+                {
+                  githubResult.error
+                }
+              </p>
+
+            </div>
+
+          ) : githubResult ? (
+
+            <div className="analysis-result">
+
+              <div className="stats-grid">
+
+                <div className="stat-card">
+
+                  <span>
+                    Files Reviewed
                   </span>
 
-                  <span className="card-subtitle">
-                    AI-powered security assessment
+                  <strong>
+                    {
+                      githubResult.files_reviewed
+                    }
+                  </strong>
+
+                </div>
+
+                <div className="stat-card">
+
+                  <span>
+                    Findings
                   </span>
+
+                  <strong>
+                    {
+                      githubResult.findings
+                        ?.length || 0
+                    }
+                  </strong>
+
+                </div>
+
+                <div className="stat-card">
+
+                  <span>
+                    Risk Level
+                  </span>
+
+                  <strong>
+                    {
+                      githubResult.risk_level
+                    }
+                  </strong>
+
+                </div>
+
+                <div className="stat-card">
+
+                  <span>
+                    Decision
+                  </span>
+
+                  <strong>
+                    {
+                      githubResult.decision
+                    }
+                  </strong>
+
                 </div>
 
               </div>
 
+              <div className="risk-visual">
 
-              {!result ? (
+                <div
+                  className="risk-circle"
+                  style={{
+                    "--risk": `${getRiskAngle(
+                      githubResult.risk_score
+                    )}deg`,
+                  }}
+                >
 
-                <div className="empty-state">
-
-                  <div className="empty-icon">
-                    ✦
-                  </div>
-
-                  <h3>
-                    Ready to analyze
-                  </h3>
-
-                  <p>
-                    Submit your code to receive a detailed
-                    release-risk assessment.
-                  </p>
-
-                </div>
-
-              ) : result.error ? (
-
-                <div className="empty-state">
-
-                  <div className="empty-icon">
-                    ⚠
-                  </div>
-
-                  <h3>
-                    Analysis Error
-                  </h3>
-
-                  <p>
-                    {result.error}
-                  </p>
-
-                </div>
-
-              ) : (
-
-                <div className="analysis-result">
-
-                  <div className="risk-summary">
-
-                    <div>
-
-                      <span className="risk-label">
-                        RISK SCORE
-                      </span>
-
-                      <div className="risk-score">
-                        {result.risk_score}
-                        <span>/100</span>
-                      </div>
-
-                    </div>
-
-                    <div
-                      className={`risk-badge ${result.risk_level?.toLowerCase()}`}
-                    >
-                      {result.risk_level}
-                    </div>
-
-                  </div>
-
-
-                  <div className="risk-meter">
-
-                    <div
-                      className="risk-meter-fill"
-                      style={{
-                        width: `${result.risk_score}%`,
-                      }}
-                    ></div>
-
-                  </div>
-
-
-                  <div className="decision-box">
-
-                    <span>RELEASE DECISION</span>
+                  <div className="risk-circle-inner">
 
                     <strong>
-                      {result.decision}
+                      {
+                        githubResult.risk_score
+                      }
                     </strong>
 
+                    <span>
+                      /100
+                    </span>
+
                   </div>
 
+                </div>
 
-                  <div className="findings-section">
+                <div className="risk-details">
 
-                    <div className="findings-header">
+                  <span className="risk-label">
+                    REPOSITORY RISK
+                  </span>
 
-                      <span>
-                        FINDINGS
-                      </span>
+                  <h2>
+                    {
+                      githubResult.risk_level
+                    }
+                  </h2>
 
-                      <strong>
-                        {result.findings?.length || 0}
-                      </strong>
+                  <p>
+                    CodeGuard recommends:
+                    <strong>
+                      {" "}
+                      {
+                        githubResult.decision
+                      }
+                    </strong>
+                  </p>
 
-                    </div>
+                  <div className="risk-bar">
 
+                    <div
+                      className="risk-bar-fill"
+                      style={{
+                        width: `${Math.min(
+                          Math.max(
+                            Number(
+                              githubResult.risk_score
+                            ) || 0,
+                            0
+                          ),
+                          100
+                        )}%`,
+                      }}
+                    />
 
-                    {result.findings &&
-                    result.findings.length > 0 ? (
+                  </div>
 
-                      result.findings.map(
-                        (finding, index) => (
+                </div>
 
-                          <div
-                            className="finding"
-                            key={index}
-                          >
+              </div>
 
-                            <div className="finding-icon">
-                              !
-                            </div>
+              <div
+                className={`risk-panel ${getRiskClass(
+                  githubResult.risk_level
+                )}`}
+              >
 
-                            <div>
+                <div>
 
-                              <div className="finding-title">
+                  <span>
+                    Repository
+                  </span>
 
-                                <strong>
-                                  {finding.severity}
-                                </strong>
+                  <h3>
+                    {
+                      githubResult.repository
+                    }
+                  </h3>
 
-                                <span>
-                                  {finding.type}
-                                </span>
+                </div>
 
-                              </div>
+                <div>
 
-                              <p>
-                                {finding.message}
-                              </p>
+                  <span>
+                    Default Branch
+                  </span>
 
-                            </div>
+                  <h3>
+                    {
+                      githubResult.default_branch ||
+                      "main"
+                    }
+                  </h3>
 
-                          </div>
+                </div>
 
-                        )
-                      )
+              </div>
 
-                    ) : (
+              <div className="findings-section">
 
-                      <div className="safe-message">
-                        ✓ No major issues detected
+                <h3>
+                  Security Findings
+                </h3>
+
+                {githubResult.findings?.length > 0 ? (
+
+                  githubResult.findings.map(
+                    (
+                      finding,
+                      index
+                    ) => (
+
+                      <div
+                        key={index}
+                        className={`issue ${getSeverityClass(
+                          finding?.severity
+                        )}`}
+                      >
+
+                        <div className="issue-header">
+
+                          <strong>
+                            {
+                              finding?.severity ||
+                              "Info"
+                            }
+                            {" — "}
+                            {
+                              finding?.type ||
+                              "Finding"
+                            }
+                          </strong>
+
+                        </div>
+
+                        <p>
+                          {
+                            finding?.message ||
+                            "No description provided."
+                          }
+                        </p>
+
+                        {finding?.recommendation && (
+
+                          <p>
+
+                            <strong>
+                              Recommendation:
+                            </strong>
+
+                            {" "}
+
+                            {
+                              finding.recommendation
+                            }
+
+                          </p>
+
+                        )}
+
                       </div>
 
-                    )}
+                    )
+                  )
+
+                ) : (
+
+                  <div className="empty-state">
+
+                    <h3>
+                      No security issues found
+                    </h3>
+
+                    <p>
+                      CodeGuard did not find
+                      security issues in the
+                      reviewed repository.
+                    </p>
 
                   </div>
+
+                )}
+
+              </div>
+
+              {githubResult.file_results?.length > 0 && (
+
+                <div className="findings-section">
+
+                  <h3>
+                    Reviewed Files
+                  </h3>
+
+                  {githubResult.file_results.map(
+                    (
+                      file,
+                      index
+                    ) => (
+
+                      <div
+                        className="file-result"
+                        key={index}
+                      >
+
+                        <div>
+
+                          <strong>
+                            {
+                              file?.filename
+                            }
+                          </strong>
+
+                          <p>
+                            {
+                              file?.size ||
+                              0
+                            }{" "}
+                            bytes
+                          </p>
+
+                        </div>
+
+                        <span>
+                          {
+                            file?.findings
+                              ?.length || 0
+                          }{" "}
+                          findings
+                        </span>
+
+                      </div>
+
+                    )
+                  )}
 
                 </div>
 
@@ -643,25 +1405,194 @@ hello_world()`}
 
             </div>
 
-          </section>
+          ) : (
 
+            <div className="empty-state">
 
-          {/* FOOTER */}
-          <footer>
+              <div className="empty-icon">
+                ⑂
+              </div>
+
+              <h3>
+                Review a GitHub Repository
+              </h3>
+
+              <p>
+                Enter any accessible GitHub
+                repository URL. No Pull Request
+                number is required.
+              </p>
+
+            </div>
+
+          )}
+
+        </section>
+
+        {/* ===================================================
+            SECURITY FEATURES
+            =================================================== */}
+
+        <section
+          id="security"
+          className="results-card"
+        >
+
+          <div className="card-header">
+
+            <div>
+
+              <span className="card-title">
+                CodeGuard Protection
+              </span>
+
+              <span className="card-subtitle">
+                Rule-based + AI-powered
+                analysis
+              </span>
+
+            </div>
+
+          </div>
+
+          <div className="security-features">
+
+            <div className="feature-card">
+
+              <span>
+                🔐
+              </span>
+
+              <h3>
+                Secret Detection
+              </h3>
+
+              <p>
+                Detect hardcoded passwords
+                and sensitive credentials.
+              </p>
+
+            </div>
+
+            <div className="feature-card">
+
+              <span>
+                💉
+              </span>
+
+              <h3>
+                Injection Detection
+              </h3>
+
+              <p>
+                Identify suspicious SQL
+                and unsafe input handling.
+              </p>
+
+            </div>
+
+            <div className="feature-card">
+
+              <span>
+                🤖
+              </span>
+
+              <h3>
+                Gemini AI Review
+              </h3>
+
+              <p>
+                Understand code context
+                and recommend fixes.
+              </p>
+
+            </div>
+
+            <div className="feature-card">
+
+              <span>
+                🚦
+              </span>
+
+              <h3>
+                Release Decision
+              </h3>
+
+              <p>
+                Automatically classify
+                changes as deploy,
+                review or block.
+              </p>
+
+            </div>
+
+          </div>
+
+        </section>
+
+        {/* ===================================================
+            REPOSITORY
+            =================================================== */}
+
+        <section
+          id="repository"
+          className="results-card"
+        >
+
+          <div className="card-header">
+
+            <div>
+
+              <span className="card-title">
+                Repository Analysis
+              </span>
+
+              <span className="card-subtitle">
+                Analyze source code directly
+                from GitHub
+              </span>
+
+            </div>
+
+          </div>
+
+          <div className="file-result">
+
+            <div>
+
+              <strong>
+                Any accessible GitHub repository
+              </strong>
+
+              <p>
+                Paste a repository URL above
+                to begin analysis.
+              </p>
+
+            </div>
 
             <span>
-              CodeGuard AI • Intelligent Developer Tools
+              GitHub
             </span>
 
-            <span>
-              v1.0.0
-            </span>
+          </div>
 
-          </footer>
+        </section>
 
-        </main>
+        {/* ===================================================
+            FOOTER
+            =================================================== */}
 
-      </div>
+        <footer className="footer">
+
+          <p>
+            CodeGuard — AI-powered
+            secure software delivery
+          </p>
+
+        </footer>
+
+      </main>
 
     </div>
   );

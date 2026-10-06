@@ -1,8 +1,10 @@
 import json
 
+from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
+load_dotenv()
 
 client = genai.Client(
     http_options=types.HttpOptions(
